@@ -1,0 +1,3 @@
+# put in your white lists
+# *.example.com
+# www.example.com
