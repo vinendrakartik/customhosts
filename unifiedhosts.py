@@ -94,9 +94,11 @@ def read_list_file(path):
                     if not line or line.startswith('#'): continue
                     
                     if line.startswith("*."):
-                        wildcards.add(line[2:]) # Store 'domain.com'
+                        wildcards.add(line[2:])
                     else:
-                        specific.add(line)
+                        # FIX: Filter IPs from blacklist file too
+                        if not IP_REGEX.match(line):
+                            specific.add(line)
         except Exception as e: print(f"   ⚠️ Error: {e}")
     return specific, wildcards
 
@@ -119,19 +121,12 @@ def download_logs():
             url = f"https://api.nextdns.io/profiles/{pid}/logs/download"
             print(f"   ⬇️ {pid}...", end=" ", flush=True)
             try:
-                # Attempt 1: Full Range
                 r = requests.get(url, headers=headers, params={"from": start_ts}, stream=True)
-                
-                # Attempt 2: Default (if range too large)
-                if r.status_code == 400:
-                    r = requests.get(url, headers=headers, stream=True)
-                
+                if r.status_code == 400: r = requests.get(url, headers=headers, stream=True)
                 r.raise_for_status()
-                
                 fn = f"temp_{pid}.csv"
                 with open(fn, 'wb') as f:
                     for chunk in r.iter_content(32768): f.write(chunk)
-                
                 if os.path.getsize(fn) > 100: 
                     temp_files.append(fn)
                     print("✅")
@@ -147,7 +142,6 @@ def write_file(path, fallback, domains, header):
         if os.path.exists(path): writable = os.access(path, os.W_OK)
         else: writable = os.access(os.path.dirname(path) or '.', os.W_OK)
     except: writable = False
-    
     if not writable: target = fallback
 
     try:
@@ -157,7 +151,10 @@ def write_file(path, fallback, domains, header):
             
         with open(target, 'w', encoding='utf-8') as f:
             f.write(f"# {header}\n# Generated: {datetime.now()}\n127.0.0.1 localhost\n::1 localhost\n\n")
-            for d in sorted(domains): f.write(f"0.0.0.0 {d}\n")
+            for d in sorted(domains): 
+                # Final Safety Check for IPs
+                if not IP_REGEX.match(d):
+                    f.write(f"0.0.0.0 {d}\n")
         print(f"   ✅ Saved: {target}")
     except: print(f"   ❌ Failed to write: {target}")
 
@@ -180,7 +177,7 @@ def main():
                 if d.startswith("*."): wl_wildcards.add(d[2:])
                 else: wl_specific.add(d)
 
-    # 3. Logs (NextDNS + Local CSVs)
+    # 3. Logs
     logs = download_logs()
     logs.extend(glob.glob("*.csv"))
     
@@ -194,13 +191,14 @@ def main():
             for chunk in pd.read_csv(f, usecols=['domain', 'status'], chunksize=50000):
                 chunk['domain'] = chunk['domain'].str.lower().str.strip()
                 chunk = chunk.dropna(subset=['domain'])
+                # FIX: Filter IPs from logs
                 chunk = chunk[~chunk['domain'].str.match(IP_REGEX)]
                 
                 csv_allowed_log.update(chunk[chunk['status'] != 'blocked']['domain'])
                 csv_blocked.update(chunk[chunk['status'] == 'blocked']['domain'])
         except: pass
 
-    # 4. Merge Block Sources (Logs + System Hosts + Blacklist Specifics)
+    # 4. Merge Block Sources (Logs + System Hosts + Blacklist)
     sys_blocked = set()
     for p in [LINUX_HOSTS_PATH, WINDOWS_HOSTS_PATH]:
         if os.path.exists(p):
@@ -208,29 +206,31 @@ def main():
                 with open(p) as f:
                     for l in f:
                         parts = l.strip().split()
+                        # Typical hosts line: 0.0.0.0 domain.com
                         if len(parts) >= 2 and parts[0] in ['0.0.0.0', '127.0.0.1']:
                             d = parts[1].lower()
-                            if d not in ['localhost', 'broadcasthost', 'local']: sys_blocked.add(d)
+                            if d in ['localhost', 'broadcasthost', 'local']: continue
+                            
+                            # FIX: STRICT IP FILTER on existing hosts entries
+                            if IP_REGEX.match(d): continue
+                            
+                            sys_blocked.add(d)
             except: pass
 
-    # Add blacklist specific domains to candidate list
+    # Combine all potential blocks
     all_candidates = csv_blocked.union(sys_blocked).union(bl_specific)
     
-    # 5. Apply Whitelisting (Priority: Whitelist > Blacklist > Logs)
+    # 5. Apply Whitelisting (The Gatekeeper)
     final_blocked = set()
     all_wl_specific = wl_specific.union(csv_allowed_log).union(SAFETY_ROOTS)
     
     for d in all_candidates:
-        # 1. Exact Match Whitelist
         if d in all_wl_specific: continue
-        # 2. Wildcard Match Whitelist (*.google.com allows mail.google.com)
         if is_whitelisted(d, set(), wl_wildcards): continue
-        
         final_blocked.add(d)
 
     print(f"   Unique Blocks: {len(final_blocked)}")
     print(f"   Explicit Whitelist: {len(all_wl_specific)}")
-    print(f"   Wildcard Whitelist: {len(wl_wildcards)}")
 
     # 6. Wildcard Detection
     print("\n--- 🤖 Analyzing Patterns ---")
@@ -248,14 +248,13 @@ def main():
 
     auto_wildcards = set()
     covered_domains = set()
-    
     sorted_suffixes = sorted(suffix_counts.keys(), key=lambda x: (x.count('.'), len(x)), reverse=True)
     
     for suffix in sorted_suffixes:
         count = len(domain_map[suffix] - covered_domains)
         if count < CLUSTER_THRESHOLD: continue
         
-        # Safety: Don't wildcard whitelisted/protected roots
+        # Safety Checks
         if suffix in all_wl_specific or suffix in SAFETY_ROOTS: continue
         if is_whitelisted(suffix, set(), wl_wildcards): continue
 
@@ -279,8 +278,7 @@ def main():
         auto_wildcards.add(suffix)
         covered_domains.update(domain_map[suffix])
 
-    # 7. Merge Blacklist Wildcards
-    # Manual wildcards are added AFTER safety checks (User Override)
+    # 7. Merge Manual Blacklist Wildcards
     final_wildcards = auto_wildcards.union(bl_wildcards)
 
     print(f"   💡 Auto-Wildcards: {len(auto_wildcards)}")
@@ -289,7 +287,7 @@ def main():
     # 8. Outputs
     print("\n--- 💾 Saving ---")
     
-    # A. App Output (Wildcards + Remaining Specifics)
+    # A. App Output
     with open(OUTPUT_APP, 'w') as f:
         f.write("# Unified App Blocklist\n# 🤖 Wildcards:\n")
         for w in sorted(final_wildcards): f.write(f"*.{w}\n")
@@ -298,7 +296,7 @@ def main():
         for d in sorted(remaining): f.write(f"{d}\n")
     print(f"   ✅ App List Saved")
 
-    # B/C. System Hosts (Specifics Only)
+    # B/C. System Hosts
     write_file(LINUX_HOSTS_PATH, OUTPUT_LINUX_LOCAL, final_blocked, "Unified Linux")
     write_file(WINDOWS_HOSTS_PATH, OUTPUT_WIN_LOCAL, final_blocked, "Unified Windows")
 
