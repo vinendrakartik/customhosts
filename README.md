@@ -1,74 +1,56 @@
-customhosts
+# customhosts
 
-Generate your custom block list from your NextDNS blocked domains. Specifically to block on device without reaching NextDNS, saving queries in your monthly quota and improving latency by resolving blocks locally.
-🚀 Overview
+**customhosts** is a smart, blocklist generator that synchronizes your **NextDNS** activity with your local device. 
 
-This tool automatically fetches your activity logs from the NextDNS API and local CSV exports to build a consolidated system-level blocklist. It uses intelligent pattern recognition and statistical analysis to find the "deepest common parent" for tracking subdomains, allowing for aggressive wildcard blocking without breaking the main functionality of trusted sites.
-✨ Key Features
+It analyzes your logs to generate a consolidated system-level blocklist (`hosts` file). This allows you to block ads, telemetry, and trackers directly on your device **before** the request leaves your network, significantly reducing latency and saving your NextDNS monthly query quota.
 
-    NextDNS API Integration: Automatically downloads your blocked domain logs and account allowlists.
+## 🚀 Overview
 
-    Deep Suffix Analysis: Smart grouping logic that identifies repeating patterns (e.g., o12345.ingest.sentry.io and o67890.ingest.sentry.io become *.ingest.sentry.io).
+Unlike static blocklists, `customhosts` learns from your specific traffic patterns. It uses statistical analysis and pattern recognition to identify "garbage" subdomains (like generated UUIDs or tracking nodes) and aggressively wildcards them, while automatically protecting the root domains of sites you actually visit.
 
-    Intelligent Pattern Recognition: Automatically detects and wildcards subdomains containing:
+## ✨ Key Features
 
-        UUIDs (e.g., 0160680c-6122-4253...)
+* **NextDNS API Integration**: Automatically pulls your blocked domain logs and account allowlists.
+* **Deep Suffix Analysis**: Uses intelligent grouping to find the "deepest common parent" for tracking subdomains (e.g., converting `o1.ingest.sentry.io` and `o2.ingest.sentry.io` into `*.ingest.sentry.io`) without blocking the main `sentry.io` site.
+* **Dynamic Safety Rails**: Automatically learns your "trusted roots." If you have successfully visited any subdomain of a site (e.g., `www.wikipedia.org`), the script marks `wikipedia.org` as a **Protected Root** and refuses to wildcard block it, preventing accidental breakage.
+* **Intelligent Pattern Recognition**: Detects and wildcards generated subdomains containing:
+    * UUIDs (e.g., `0160680c-6122-4253...`)
+    * Long Hexadecimal strings (e.g., Minerva/A2Z devices)
+    * Telemetry keywords (`metrics`, `measure`, `pixel`, etc.)
+* **Hybrid Data Sources**: Merges data from:
+    * NextDNS API
+    * Local `.csv` log exports
+    * `whitelist.txt` & `blacklist.txt` (Supports wildcards)
+    * Existing System `hosts` files (Windows/Linux)
+* **Universal Output**: Generates files for:
+    * **App Blocker**: Optimized with wildcards (for Android apps like AdAway/DNS66).
+    * **System Hosts**: Expanded standard format for Windows and Linux.
 
-        Long Hexadecimal IDs (Minerva/A2Z devices)
+## 🛠️ Requirements
 
-        Sentry/Telemetry nodes
+* **Python 3.x**
+* **Libraries**: `pandas`, `requests`
 
-    Dynamic Safety Rails: Analyzes your "Allowed" traffic to identify user-trusted roots. If you successfully visit any part of a domain, the script marks it as a "Protected Root" and refuses to wildcard it, ensuring sites like Wikipedia, Mozilla, or your banking portals never break.
+* **bash**
+* **pip install pandas requests**
+  ##⚙️ Configuration
 
-    Conflict Resolution (WL > BL): Strictly enforces user preference where the whitelist always overrides any automated or manual blacklist.
-
-    Hybrid Data Sources: Merges data from:
-
-        NextDNS API (Logs & Allowlists)
-
-        Local .csv log exports
-
-        whitelist.txt (Supports specific domains and *.wildcards)
-
-        blacklist.txt (Supports specific domains and *.wildcards)
-
-        Existing System hosts files (Windows/Linux)
-
-    Universal Output:
-
-        App Blocker: Optimized with wildcards for tools like AdAway or Personal DNS Filter.
-
-        System Hosts: Standard format for /etc/hosts and Windows drivers.
-
-🛠️ Requirements
-
-    Python 3.x
-
-    pandas
-
-    requests
-
-Bash
-
-pip install pandas requests
-
-⚙️ Setup & Configuration
-
-    API Keys: Open the script and edit the NEXTDNS_CONFIG section with your API key and Profile IDs:
+    Edit the Script: Open block.py and update the NEXTDNS_CONFIG dictionary with your details:
     Python
 
     NEXTDNS_CONFIG = {
-        "your_api_key_1": ["profile_id_a", "profile_id_b"],
-        "your_api_key_2": ["profile_id_c"]
+        "YOUR_API_KEY": ["profile_id_1", "profile_id_2"],
+        "ANOTHER_KEY": ["profile_id_3"]
     }
 
-    Whitelist (whitelist.txt): Add domains you never want blocked. Use *. for wildcards:
+    Whitelist (whitelist.txt): Create this file to prevent specific domains from ever being blocked. Supports wildcards:
     Plaintext
 
     *.google.com
     wikipedia.org
+    bankofamerica.com
 
-    Blacklist (blacklist.txt): Manually force-block specific domains or patterns:
+    Blacklist (blacklist.txt): Create this file to force-block domains, overriding safety checks (but not the whitelist):
     Plaintext
 
     *.annoying-tracker.net
@@ -76,29 +58,31 @@ pip install pandas requests
 
 🖥️ Usage
 
-Run the script with administrative privileges to allow it to update your system hosts files automatically:
+Run the script (use sudo if you want it to automatically update /etc/hosts or the Windows hosts file):
 Bash
 
-sudo python3 block.py
+sudo python3 unifiedhosts.py
 
 Output Files
 
-    hosts_app_output.txt: The optimized list using wildcards (Recommended for mobile apps).
+    hosts_app_output.txt: The highly optimized list containing wildcards (e.g., *.ads.example.com). Best for mobile ad-blocking apps.
 
-    hosts_windows_output: Generated Windows hosts file (fallback if drive is read-only).
+    hosts_windows_output: Standard hosts format. The script attempts to write this directly to C:\Windows\System32\drivers\etc\hosts. If the file system is read-only (e.g., dual-booting Linux), it saves this file locally for manual copying.
 
-    hosts_linux_output: Generated Linux hosts file.
+    hosts_linux_output: Standard hosts format for /etc/hosts.
 
-🧠 How the Intelligent Detection Works
+🧠 Logic & Safety
 
-The script employs a multi-step analysis to distinguish between "content" domains and "tracking" domains:
+The script follows a strict hierarchy to ensure stability:
 
-    Entropy Analysis: It calculates the mathematical randomness of subdomains. High-entropy strings are flagged as generated tracking IDs.
+    Explicit Whitelist (whitelist.txt + NextDNS Allowlist) WINS.
 
-    Consumption Logic: To prevent over-blocking, the script processes potential wildcards from the deepest subdomain level up to the root. Once a subdomain is covered (consumed) by a wildcard (e.g., *.prod.cloud.adobe.io), it no longer counts toward the threshold for blocking the root (adobe.io).
+    Safety Protection: If you visit a site, its root domain is locked.
 
-    Pattern Boosting: High-confidence keywords like ingest, telemetry, measure, and ads lower the cluster threshold, allowing for faster detection of new tracking endpoints.
+    Manual Blacklist: Added next.
 
-⚠️ Permission Notes
+    ** Wildcards**: Only applied if a domain is NOT protected and exhibits tracking patterns (High Entropy or High Volume).
 
-If you are dual-booting and running this on Linux to update a Windows hosts file on a mounted NTFS partition, ensure Windows was shut down completely (Fast Startup disabled). If the script detects the path is read-only, it will safely save the output in your local directory as hosts_windows_output.
+⚠️ Permission Note for Dual Booters
+
+If you are running this on Linux to update a mounted Windows partition, ensure Windows was fully shut down (not hibernated/Fast Startup). If the partition is read-only, the script will detect this and save the file locally instead of crashing.
