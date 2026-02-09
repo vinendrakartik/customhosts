@@ -1,0 +1,3 @@
+# put in your black lists
+# *.example.com
+# www.example.com
