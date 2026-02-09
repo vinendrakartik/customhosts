@@ -58,6 +58,7 @@
 *.graph.meta.com
 *.gvt2.com
 *.healthline.com
+*.in.heytapdl.com
 *.hicloud.com
 *.hotjar.com
 *.hz.sandai.net
