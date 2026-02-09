@@ -143,6 +143,7 @@
 
 # 🎯 Specific Domains:
 0mo5a70cqa.adobe.io
+location.services.mozilla.com
 0ojupfm51u.adobe.io
 12ezo5v60.com
 1b9khekel6.adobe.io
